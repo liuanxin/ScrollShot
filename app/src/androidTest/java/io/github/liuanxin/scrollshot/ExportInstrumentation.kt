@@ -116,13 +116,13 @@ class ExportInstrumentation : Instrumentation() {
         }
         var time = android.os.SystemClock.uptimeMillis()
         val down = time
-        fun event(action: Int, span: Float, count: Int = 2) {
+        fun event(action: Int, span: Float, count: Int = 2, center: Float = 540f) {
             val properties = Array(count) { index -> android.view.MotionEvent.PointerProperties().apply {
                 id = index
                 toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
             } }
             val coordinates = Array(count) { index -> android.view.MotionEvent.PointerCoords().apply {
-                x = 540f + if (index == 0) { -span / 2 } else { span / 2 }
+                x = center + if (index == 0) { -span / 2 } else { span / 2 }
                 y = 900f
                 pressure = 1f
                 size = 1f
@@ -135,13 +135,22 @@ class ExportInstrumentation : Instrumentation() {
         }
         event(android.view.MotionEvent.ACTION_DOWN, 900f, 1)
         event(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl 8), 900f)
-        for (span in 900 downTo 200 step 20) { event(android.view.MotionEvent.ACTION_MOVE, span.toFloat()) }
+        event(android.view.MotionEvent.ACTION_MOVE, 880f)
+        check(visibleWidth() in 980..1010) { "双指细小移动未立即缩放" }
+        for (span in 880 downTo 80 step 20) { event(android.view.MotionEvent.ACTION_MOVE, span.toFloat()) }
         val smallWidth = visibleWidth()
-        check(smallWidth in 100..650) { "单屏截图无法缩小: width=$smallWidth" }
-        for (span in 200..900 step 20) { event(android.view.MotionEvent.ACTION_MOVE, span.toFloat()) }
+        check(smallWidth in 50..110) { "单屏截图无法缩小: width=$smallWidth" }
+        event(android.view.MotionEvent.ACTION_MOVE, 80f, center = 1500f)
+        check(visibleWidth() == 0) { "双指平移未跟随中心" }
+        event(android.view.MotionEvent.ACTION_MOVE, 80f)
+        check(visibleWidth() == smallWidth) { "双指平移改变了比例" }
+        for (span in 80..900 step 20) { event(android.view.MotionEvent.ACTION_MOVE, span.toFloat()) }
         check(visibleWidth() > smallWidth * 1.5) { "缩小后无法放大" }
         event(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl 8), 900f)
-        event(android.view.MotionEvent.ACTION_UP, 900f, 1)
+        val beforeDrag = visibleWidth()
+        event(android.view.MotionEvent.ACTION_MOVE, 900f, 1, 790f)
+        check(visibleWidth() < beforeDrag - 150) { "松开一指后无法继续平移" }
+        event(android.view.MotionEvent.ACTION_UP, 900f, 1, 790f)
         check(view.cropPixels() == originalCrop) { "预览缩放改变了裁剪尺寸" }
         source.recycle()
     }

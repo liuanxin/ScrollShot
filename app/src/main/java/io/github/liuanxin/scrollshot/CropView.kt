@@ -8,9 +8,9 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.view.MotionEvent
-import android.view.ScaleGestureDetector
 import android.view.View
 import kotlin.math.abs
+import kotlin.math.hypot
 
 /** 单指拖动边框裁剪, 拖动画面平移, 双指缩放. 裁剪坐标始终使用原图像素. */
 class CropView(context: Context, private val bitmap: Bitmap, private val imageWidth: Int, private val imageHeight: Int) : View(context) {
@@ -25,17 +25,30 @@ class CropView(context: Context, private val bitmap: Bitmap, private val imageWi
     private var edges = 0
     private var scaling = false
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean { scaling = true; edges = 0; return true }
-        override fun onScale(detector: ScaleGestureDetector): Boolean {
-            val old = zoom
-            zoom = (zoom * detector.scaleFactor).coerceIn(fit * 0.25f, maxOf(fit * 30, 2f))
-            offsetX = detector.focusX - (detector.focusX - offsetX) * zoom / old
-            offsetY = detector.focusY - (detector.focusY - offsetY) * zoom / old
-            invalidate()
-            return true
+    private var span = 0f
+    private var focusX = 0f
+    private var focusY = 0f
+
+    // 手指数改变时重建基准, 避免切换手指造成跳动.
+    private fun rebasePointers(event: MotionEvent, excluded: Int = -1) {
+        var first = -1
+        var second = -1
+        for (index in 0 until event.pointerCount) {
+            if (index != excluded) {
+                if (first == -1) { first = index } else if (second == -1) { second = index }
+            }
         }
-    })
+        scaling = second >= 0
+        edges = 0
+        if (scaling) {
+            focusX = (event.getX(first) + event.getX(second)) / 2f
+            focusY = (event.getY(first) + event.getY(second)) / 2f
+            span = hypot(event.getX(first) - event.getX(second), event.getY(first) - event.getY(second))
+        } else if (first >= 0) {
+            previousX = event.getX(first)
+            previousY = event.getY(first)
+        }
+    }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         fit = minOf((w - 48f) / imageWidth, (h - 48f) / imageHeight).coerceAtLeast(0.001f)
@@ -80,7 +93,6 @@ class CropView(context: Context, private val bitmap: Bitmap, private val imageWi
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!isEnabled) { return true }
-        scaleDetector.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 scaling = false
@@ -100,8 +112,29 @@ class CropView(context: Context, private val bitmap: Bitmap, private val imageWi
                     else if (abs(event.y - bottom) < tolerance) { edges = edges or 8 }
                 }
             }
+            MotionEvent.ACTION_POINTER_DOWN -> { rebasePointers(event) }
+            MotionEvent.ACTION_POINTER_UP -> { rebasePointers(event, event.actionIndex) }
             MotionEvent.ACTION_MOVE -> {
-                if (!scaling && event.pointerCount == 1) {
+                if (scaling && event.pointerCount >= 2) {
+                    val x = (event.getX(0) + event.getX(1)) / 2f
+                    val y = (event.getY(0) + event.getY(1)) / 2f
+                    val distance = hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
+                    // 直接跟随双指距离与中心移动, 仅排除重合触点和数值溢出.
+                    val factor = if (span > 0f && distance > 0f) { distance / span } else { 1f }
+                    val nextZoom = zoom * factor
+                    val nextX = x - (focusX - offsetX) * factor
+                    val nextY = y - (focusY - offsetY) * factor
+                    if (nextZoom > 0f && nextZoom.isFinite() && (imageWidth * nextZoom).isFinite() &&
+                        (imageHeight * nextZoom).isFinite() && nextX.isFinite() && nextY.isFinite()) {
+                        zoom = nextZoom
+                        offsetX = nextX
+                        offsetY = nextY
+                    }
+                    span = distance
+                    focusX = x
+                    focusY = y
+                    invalidate()
+                } else if (!scaling && event.pointerCount == 1) {
                     val dx = (event.x - previousX) / zoom
                     val dy = (event.y - previousY) / zoom
                     if (edges == 0) { offsetX += event.x - previousX; offsetY += event.y - previousY }
