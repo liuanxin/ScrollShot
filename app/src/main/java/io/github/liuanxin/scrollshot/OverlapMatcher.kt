@@ -50,32 +50,44 @@ object OverlapMatcher {
         val scores = DoubleArray(maxShift + 1) { 255.0 }
         var bestShift = 0
         var best = 255.0
+        // 行的纹理与候选位移无关, 只计算一次; 空白行不参与匹配.
+        val informative = BooleanArray(h)
+        for (y in 0 until h) {
+            var low = 255
+            var high = 0
+            for (x in w / 12 until w - w / 12 step 2) {
+                val value = previous.pixels[y * w + x]
+                low = min(low, value)
+                high = max(high, value)
+            }
+            informative[y] = high - low > 22
+        }
         for (shift in 2..maxShift) {
-            var total = 0.0
             var rows = 0
-            var good = 0
             for (y in 2 until h - shift - 2 step 3) {
-                var low = 255
-                var high = 0
+                if (informative[y + shift]) { rows++ }
+            }
+            if (rows < max(10, (h - shift) / 18)) { continue }
+            var total = 0.0
+            var bad = 0
+            var rejected = false
+            for (y in 2 until h - shift - 2 step 3) {
+                if (!informative[y + shift]) { continue }
                 var rowError = 0
                 var samples = 0
                 for (x in w / 12 until w - w / 12 step 2) {
-                    val old = previous.pixels[(y + shift) * w + x]
-                    val now = current.pixels[y * w + x]
-                    low = min(low, old)
-                    high = max(high, old)
-                    rowError += abs(old - now)
+                    rowError += abs(previous.pixels[(y + shift) * w + x] - current.pixels[y * w + x])
                     samples++
                 }
-                // 空白背景没有定位信息, 不计入匹配可信度.
-                if (high - low > 22 && samples > 0) {
-                    val error = rowError.toDouble() / samples
-                    total += min(error, 45.0)
-                    rows++
-                    if (error < 12.0) { good++ }
+                val error = rowError.toDouble() / samples
+                total += min(error, 45.0)
+                if (error >= 12.0) {
+                    bad++
+                    // 即使剩余行全匹配也达不到原阈值时, 立即排除这个位移.
+                    if ((rows - bad).toDouble() / rows < 0.78) { rejected = true; break }
                 }
             }
-            if (rows >= max(10, (h - shift) / 18) && good.toDouble() / rows >= 0.78) {
+            if (!rejected) {
                 val score = total / rows
                 scores[shift] = score
                 if (score < best) { best = score; bestShift = shift }

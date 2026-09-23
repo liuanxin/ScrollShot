@@ -42,7 +42,8 @@ class CaptureService : AccessibilityService() {
     private var overlay: TextView? = null
     private var dimOverlay: View? = null
     private var lastFrame: OverlapMatcher.Frame? = null
-    private var stableAttempts = 0
+    private var stabilityStartedAt = 0L
+    private var lastScreenshotAt = 0L
     private var unchangedCount = 0
     private var startedAt = 0L
     private var finishReason = "已停止"
@@ -105,7 +106,7 @@ class CaptureService : AccessibilityService() {
         unchangedCount = 0
         boundsRefined = false
         lastFrame = null
-        stableAttempts = 0
+        stabilityStartedAt = 0L
         captureStable(token, true)
     }
 
@@ -174,6 +175,15 @@ class CaptureService : AccessibilityService() {
         if (!active || token != generation) { return }
         if (!targetValid()) { busy = false; stop("页面或屏幕方向已变化, 已保留完成部分"); return }
         busy = true
+        val now = SystemClock.uptimeMillis()
+        // 统一控制截图请求间隔, 快速探测稳定画面时不触发系统限流.
+        val delay = 260L - (now - lastScreenshotAt)
+        if (delay > 0) {
+            handler.postDelayed({ captureStable(token, first) }, delay)
+            return
+        }
+        if (stabilityStartedAt == 0L) { stabilityStartedAt = now }
+        lastScreenshotAt = now
         takeScreenshotOfWindow(windowId, mainExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
                 val bitmap = try {
@@ -196,15 +206,15 @@ class CaptureService : AccessibilityService() {
                         lastFrame = frame
                         handler.post {
                             if (!active || token != generation) { bitmap.recycle(); return@post }
-                            if (!stable && stableAttempts++ < 8) {
+                            if (!stable && SystemClock.uptimeMillis() - stabilityStartedAt < 3000L) {
                                 bitmap.recycle()
-                                handler.postDelayed({ captureStable(token, first) }, 350)
+                                handler.post { captureStable(token, first) }
                             } else if (!stable) {
                                 bitmap.recycle()
                                 busy = false
                                 stop("画面持续变化, 已暂停并保留完成部分")
                             } else {
-                                stableAttempts = 0
+                                stabilityStartedAt = 0L
                                 lastFrame = null
                                 process(bitmap, frame, token, first)
                             }
@@ -218,7 +228,10 @@ class CaptureService : AccessibilityService() {
             override fun onFailure(errorCode: Int) {
                 if (!active || token != generation) { return }
                 if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
-                    handler.postDelayed({ captureStable(token, first) }, 400)
+                    if (SystemClock.uptimeMillis() - stabilityStartedAt >= 3000L) {
+                        busy = false
+                        stop("系统截图暂不可用, 已保留完成部分")
+                    } else { handler.postDelayed({ captureStable(token, first) }, 400) }
                 } else {
                     busy = false
                     stop(if (errorCode == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW) { "当前页面禁止截图" } else { "截图失败($errorCode), 已保留完成部分" })
@@ -302,7 +315,7 @@ class CaptureService : AccessibilityService() {
                 else {
                     if (overlay == null) { showMonitor() }
                     overlay?.text = "${document?.height ?: 0}px · 点击此处停止"
-                    handler.postDelayed({ scrollNext(token) }, 350)
+                    handler.post { scrollNext(token) }
                 }
             }
         }
@@ -366,7 +379,7 @@ class CaptureService : AccessibilityService() {
         val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 850)).build()
         val submitted = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                if (active && !stopping && token == generation) { handler.postDelayed({ captureStable(token, false) }, 400) }
+                if (active && !stopping && token == generation) { handler.postDelayed({ captureStable(token, false) }, 100) }
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 if (active && !stopping && token == generation) { stop("滚动被打断, 已保留完成部分") }
@@ -387,14 +400,19 @@ class CaptureService : AccessibilityService() {
             textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setBackgroundColor(0xdd263d37.toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xf02b4941.toInt())
+                cornerRadius = 22 * resources.displayMetrics.density
+                setStroke((resources.displayMetrics.density).toInt(), 0xff94cbb8.toInt())
+            }
+            elevation = 6 * resources.displayMetrics.density
             setOnTouchListener { _, event ->
                 if (event.actionMasked == MotionEvent.ACTION_DOWN) { stopByTouch() }
                 true
             }
         }
         val density = resources.displayMetrics.density
-        val params = WindowManager.LayoutParams((250 * density).toInt(), (36 * density).toInt(), WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        val params = WindowManager.LayoutParams((250 * density).toInt(), (44 * density).toInt(), WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = (12 * density).toInt() }
         overlay = text
