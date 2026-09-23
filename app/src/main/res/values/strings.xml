@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">长截图</string>
+    <string name="accessibility_description">仅在点击快捷设置中的长截图后, 读取当前窗口画面并滚动页面. 截取过程中点击顶部提示条停止, 随后裁剪并保存. 所有图片仅在本机处理, 不联网.</string>
+</resources>

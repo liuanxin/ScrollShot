@@ -1,0 +1,9 @@
+.gradle/
+.kotlin/
+.idea/
+**/build/
+local.properties
+*.iml
+keystore/
+keystore.properties
+gradle/wrapper/gradle-*-bin.zip
