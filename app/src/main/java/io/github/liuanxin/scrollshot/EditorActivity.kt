@@ -24,7 +24,7 @@ class EditorActivity : Activity() {
     private var saving = false
     private var highQuality = false
     private var readyQuality = false
-    private lateinit var qualitySwitch: android.widget.Switch
+    private lateinit var qualityButton: Button
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val exportVersion = java.util.concurrent.atomic.AtomicInteger(0)
     private var readyExport: File? = null
@@ -36,6 +36,9 @@ class EditorActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         highQuality = savedInstanceState?.getBoolean("highQuality") ?: false
+        window.insetsController?.setSystemBarsAppearance(0,
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
         onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { confirmDiscard() }
         val id = intent.getStringExtra("capture")
         if (id == null || id.any { !it.isDigit() }) { finish(); return }
@@ -65,34 +68,43 @@ class EditorActivity : Activity() {
                     }
                     cropView.onCropChanged = { updateTitle(); prepareExport() }
                     body.addView(cropView, LinearLayout.LayoutParams(-1, 0, 1f))
-                    body.addView(TextView(this).apply {
-                        text = "${doc.reason}\n拖动四边裁剪 · 双指缩放 · 拖动画面查看"
-                        textSize = 13f
-                        setTextColor(0xffc9d8d1.toInt())
-                        setPadding(24, 12, 24, 12)
-                    })
-                    qualitySwitch = android.widget.Switch(this).apply {
-                        text = "高清 (图片更大)"
-                        textSize = 14f
-                        setTextColor(Color.WHITE)
-                        setPadding(24, 8, 24, 8)
-                        isChecked = highQuality
-                        setOnCheckedChangeListener { _, checked ->
-                            highQuality = checked
-                            updateTitle()
-                            prepareExport()
-                        }
+                    val actions = LinearLayout(this).apply {
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        setPadding(16.dp(), 12.dp(), 16.dp(), 12.dp())
                     }
-                    body.addView(qualitySwitch)
-                    val actions = LinearLayout(this)
                     fun button(label: String, action: () -> Unit): Button {
-                        val button = Button(this).apply { text = label; setOnClickListener { if (!saving) { action() } } }
-                        actions.addView(button, LinearLayout.LayoutParams(0, -2, 1f))
+                        val button = Button(this).apply {
+                            text = label
+                            textSize = 14f
+                            isAllCaps = false
+                            minWidth = 0
+                            minimumWidth = 0
+                            minHeight = 0
+                            minimumHeight = 0
+                            setPadding(0, 0, 0, 0)
+                            stateListAnimator = null
+                            backgroundTintList = null
+                            background = actionBackground()
+                            setTextColor(android.content.res.ColorStateList(
+                                arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf(android.R.attr.state_selected), intArrayOf()),
+                                intArrayOf(0xff71867c.toInt(), 0xff183b2b.toInt(), 0xffdeebe4.toInt())))
+                            setOnClickListener { if (!saving) { action() } }
+                        }
+                        actions.addView(button, LinearLayout.LayoutParams(0, 48.dp(), 1f).apply {
+                            if (actions.childCount > 0) { marginStart = 8.dp() }
+                        })
                         return button
                     }
                     button("取消") { confirmDiscard() }
                     button("重置") { cropView.reset() }
-                    saveButton = button("保存") { save() }
+                    qualityButton = button("高清") {
+                        highQuality = !highQuality
+                        updateQualityButton()
+                        updateTitle()
+                        prepareExport()
+                    }
+                    updateQualityButton()
+                    saveButton = button("保存") { save() }.apply { isSelected = true }
                     body.addView(actions)
                     updateTitle()
                     prepareExport()
@@ -102,6 +114,27 @@ class EditorActivity : Activity() {
             }
         }
     }
+    private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
+
+    private fun actionBackground(): android.graphics.drawable.Drawable {
+        fun shape(color: Int) = android.graphics.drawable.GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = 16.dp().toFloat()
+        }
+        val states = android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(-android.R.attr.state_enabled), shape(0xff23342c.toInt()))
+            addState(intArrayOf(android.R.attr.state_selected), shape(0xffafe6c8.toInt()))
+            addState(intArrayOf(), shape(0xff2b3b33.toInt()))
+        }
+        return android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x337fcda4), states, shape(Color.WHITE))
+    }
+
+    private fun updateQualityButton() {
+        qualityButton.isSelected = highQuality
+        qualityButton.stateDescription = if (highQuality) { "已开启" } else { "已关闭" }
+    }
+
     private fun updateTitle(size: Long? = null) {
         val rect = cropView.cropPixels()
         val spec = ImageExporter.spec(rect, highQuality)
@@ -162,7 +195,7 @@ class EditorActivity : Activity() {
         val spec = ImageExporter.spec(rect, highQuality)
         val quality = highQuality
         saving = true
-        qualitySwitch.isEnabled = false
+        qualityButton.isEnabled = false
         cropView.isEnabled = false
         saveButton.isEnabled = false
         saveButton.text = "保存中..."
@@ -195,7 +228,7 @@ class EditorActivity : Activity() {
                 runOnUiThread {
                     saving = false
                     cropView.isEnabled = true
-                    qualitySwitch.isEnabled = true
+                    qualityButton.isEnabled = true
                     saveButton.isEnabled = true
                     saveButton.text = "重试保存"
                     Toast.makeText(this, "保存失败, 草稿仍保留, 请检查存储空间", Toast.LENGTH_LONG).show()
