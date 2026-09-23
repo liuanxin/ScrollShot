@@ -32,7 +32,6 @@ class CaptureService : AccessibilityService() {
     private var busy = false
     private var generation = 0
     private var windowId = -1
-    private var targetPackage = ""
     private var windowBounds = Rect()
     private var region = Rect()
     private var screenRegion = Rect()
@@ -80,30 +79,26 @@ class CaptureService : AccessibilityService() {
         handler.postDelayed({ awaitTarget(token, 0) }, 600)
     }
 
-    private fun awaitTarget(token: Int, attempt: Int, scrollAttempt: Int = 0) {
+    private fun awaitTarget(token: Int, attempt: Int) {
         if (token != generation) { return }
         val window = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive }
         val root = window?.root
-        if (root == null || root.packageName?.toString() == "com.android.systemui" ||
-            (root.packageName?.toString() == packageName && root.className?.toString()?.contains("TestPage") != true && !hasTestPage(root))) {
+        if (window == null || root?.packageName?.toString() == "com.android.systemui") {
             if (attempt < 15) { handler.postDelayed({ awaitTarget(token, attempt + 1) }, 200) }
-            else { showFeedback("请回到要截图的页面再开始") }
+            else { showFeedback("未能获取当前页面, 请收起快捷面板后重试") }
             return
         }
         windowId = window.id
-        targetPackage = root.packageName.toString()
         window.getBoundsInScreen(windowBounds)
-        val scroll = findScroll(root, windowBounds)
-        if (scroll == null) {
-            // 面板退出时节点可能暂未就绪, 短暂重试后再报告失败.
-            if (scrollAttempt < 5) { handler.postDelayed({ awaitTarget(token, attempt, scrollAttempt + 1) }, 200) }
-            else { showFeedback("未找到可滚动内容, 请展开页面后重试") }
-            return
+        screenRegion.set(windowBounds)
+        // 节点只辅助避开固定栏; 缺少节点或滚动声明时仍从整个当前窗口开始.
+        val scroll = root?.let { findScroll(it, windowBounds) }
+        if (scroll != null) {
+            scroll.getBoundsInScreen(screenRegion)
+            screenRegion.intersect(windowBounds)
+            clipFixedSiblings(scroll)
+            if (screenRegion.height() < 250 || screenRegion.width() <= 0) { screenRegion.set(windowBounds) }
         }
-        scroll.getBoundsInScreen(screenRegion)
-        screenRegion.intersect(windowBounds)
-        clipFixedSiblings(scroll)
-        if (screenRegion.height() < 250) { showFeedback("滚动区域太小, 无法可靠截取"); return }
         active = true
         stopping = false
         busy = false
@@ -114,16 +109,8 @@ class CaptureService : AccessibilityService() {
         boundsRefined = false
         lastFrame = null
         stabilityStartedAt = 0L
+        showMonitor()
         captureStable(token, true)
-    }
-
-    private fun hasTestPage(node: AccessibilityNodeInfo): Boolean {
-        if (node.text?.contains("长截图测试") == true) { return true }
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            if (hasTestPage(child)) { return true }
-        }
-        return false
     }
 
     private fun findScroll(root: AccessibilityNodeInfo, bounds: Rect): AccessibilityNodeInfo? {
@@ -136,13 +123,7 @@ class CaptureService : AccessibilityService() {
             val node = queue.removeFirst()
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            val vertical = node.actionList.any {
-                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id ||
-                    it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id ||
-                    it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id ||
-                    it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id
-            }
-            if (node.isVisibleToUser && node.isScrollable && vertical && rect.intersect(bounds)) {
+            if (node.isVisibleToUser && node.isScrollable && rect.intersect(bounds)) {
                 val size = rect.width().toLong() * rect.height()
                 if (size > area && rect.height() > bounds.height() / 3) { area = size; best = node }
             }
@@ -176,7 +157,7 @@ class CaptureService : AccessibilityService() {
         val target = windows.firstOrNull { it.id == windowId } ?: return false
         val rect = Rect()
         target.getBoundsInScreen(rect)
-        return rect == windowBounds && target.root?.packageName?.toString() == targetPackage &&
+        return rect == windowBounds &&
             windows.none { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive && it.id != windowId }
     }
 
@@ -214,7 +195,8 @@ class CaptureService : AccessibilityService() {
                         val frame = sample(bitmap)
                         trace("采样完成", probeStart)
                         val last = lastFrame
-                        val stable = last != null && OverlapMatcher.isStable(last, frame)
+                        // 首帧直接保留当前位置, 后续才检测稳定与重叠.
+                        val stable = first || (last != null && OverlapMatcher.isStable(last, frame))
                         lastFrame = frame
                         handler.post {
                             if (!active || token != generation) { bitmap.recycle(); return@post }

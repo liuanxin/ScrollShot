@@ -29,7 +29,7 @@ class CropView(context: Context, private val bitmap: Bitmap, private val imageWi
         override fun onScaleBegin(detector: ScaleGestureDetector): Boolean { scaling = true; edges = 0; return true }
         override fun onScale(detector: ScaleGestureDetector): Boolean {
             val old = zoom
-            zoom = (zoom * detector.scaleFactor).coerceIn(fit, maxOf(fit * 30, 2f))
+            zoom = (zoom * detector.scaleFactor).coerceIn(fit * 0.25f, maxOf(fit * 30, 2f))
             offsetX = detector.focusX - (detector.focusX - offsetX) * zoom / old
             offsetY = detector.focusY - (detector.focusY - offsetY) * zoom / old
             invalidate()
