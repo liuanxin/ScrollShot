@@ -19,7 +19,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.TextView
-import android.widget.Toast
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -41,6 +40,7 @@ class CaptureService : AccessibilityService() {
     private var document: CaptureDocument? = null
     private var overlay: TextView? = null
     private var dimOverlay: View? = null
+    private var feedback: TextView? = null
     private var lastFrame: OverlapMatcher.Frame? = null
     private var stabilityStartedAt = 0L
     private var lastScreenshotAt = 0L
@@ -57,6 +57,7 @@ class CaptureService : AccessibilityService() {
         active = false
         handler.removeCallbacksAndMessages(null)
         removeOverlay()
+        removeFeedback()
         worker.execute {
             previous?.recycle()
             previous = null
@@ -73,30 +74,36 @@ class CaptureService : AccessibilityService() {
     }
 
     fun requestStart() {
+        removeFeedback()
         if (active) { stop("已停止"); return }
         val token = ++generation
         handler.postDelayed({ awaitTarget(token, 0) }, 600)
     }
 
-    private fun awaitTarget(token: Int, attempt: Int) {
+    private fun awaitTarget(token: Int, attempt: Int, scrollAttempt: Int = 0) {
         if (token != generation) { return }
         val window = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive }
         val root = window?.root
         if (root == null || root.packageName?.toString() == "com.android.systemui" ||
             (root.packageName?.toString() == packageName && root.className?.toString()?.contains("TestPage") != true && !hasTestPage(root))) {
             if (attempt < 15) { handler.postDelayed({ awaitTarget(token, attempt + 1) }, 200) }
-            else { toast("请回到要截图的页面再开始") }
+            else { showFeedback("请回到要截图的页面再开始") }
             return
         }
         windowId = window.id
         targetPackage = root.packageName.toString()
         window.getBoundsInScreen(windowBounds)
         val scroll = findScroll(root, windowBounds)
-        if (scroll == null) { toast("未找到可纵向滚动的区域, 请展开正文后重试"); return }
+        if (scroll == null) {
+            // 面板退出时节点可能暂未就绪, 短暂重试后再报告失败.
+            if (scrollAttempt < 5) { handler.postDelayed({ awaitTarget(token, attempt, scrollAttempt + 1) }, 200) }
+            else { showFeedback("未找到可滚动内容, 请展开页面后重试") }
+            return
+        }
         scroll.getBoundsInScreen(screenRegion)
         screenRegion.intersect(windowBounds)
         clipFixedSiblings(scroll)
-        if (screenRegion.height() < 250) { toast("滚动区域太小, 无法可靠截取"); return }
+        if (screenRegion.height() < 250) { showFeedback("滚动区域太小, 无法可靠截取"); return }
         active = true
         stopping = false
         busy = false
@@ -131,7 +138,9 @@ class CaptureService : AccessibilityService() {
             node.getBoundsInScreen(rect)
             val vertical = node.actionList.any {
                 it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id ||
-                    it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id
+                    it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id ||
+                    it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id ||
+                    it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id
             }
             if (node.isVisibleToUser && node.isScrollable && vertical && rect.intersect(bounds)) {
                 val size = rect.width().toLong() * rect.height()
@@ -472,7 +481,7 @@ class CaptureService : AccessibilityService() {
                 removeOverlay()
                 if (saved && doc != null) {
                     startActivity(Intent(this, EditorActivity::class.java).putExtra("capture", doc.directory.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } else { toast(finishReason) }
+                } else { showFeedback(finishReason) }
             }
         }
     }
@@ -488,5 +497,35 @@ class CaptureService : AccessibilityService() {
             android.util.Log.d("ScrollShotTiming", "$stage ${SystemClock.uptimeMillis() - start}ms")
         }
     }
-    private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+    private fun removeFeedback() {
+        feedback?.let { try { getSystemService(WindowManager::class.java).removeView(it) } catch (_: IllegalArgumentException) {} }
+        feedback = null
+    }
+
+    private fun showFeedback(message: String) {
+        android.util.Log.d("ScrollShotEntry", message)
+        removeFeedback()
+        val density = resources.displayMetrics.density
+        val view = TextView(this).apply {
+            text = message
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xf02b4941.toInt())
+                cornerRadius = 18 * density
+            }
+        }
+        val params = WindowManager.LayoutParams(
+            minOf((340 * density).toInt(), resources.displayMetrics.widthPixels - (32 * density).toInt()), -2,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = (12 * density).toInt() }
+        try {
+            getSystemService(WindowManager::class.java).addView(view, params)
+            feedback = view
+            handler.postDelayed({ if (feedback === view) { removeFeedback() } }, 3500)
+        } catch (_: WindowManager.BadTokenException) {}
+    }
 }
