@@ -172,12 +172,13 @@ class CaptureService : AccessibilityService() {
     }
 
     private fun captureStable(token: Int, first: Boolean) {
+        val probeStart = SystemClock.uptimeMillis()
         if (!active || token != generation) { return }
         if (!targetValid()) { busy = false; stop("页面或屏幕方向已变化, 已保留完成部分"); return }
         busy = true
         val now = SystemClock.uptimeMillis()
-        // 统一控制截图请求间隔, 快速探测稳定画面时不触发系统限流.
-        val delay = 260L - (now - lastScreenshotAt)
+        // 系统截图间隔阈值为 333ms, 留少量余量避免限流后额外重试.
+        val delay = 350L - (now - lastScreenshotAt)
         if (delay > 0) {
             handler.postDelayed({ captureStable(token, first) }, delay)
             return
@@ -186,6 +187,7 @@ class CaptureService : AccessibilityService() {
         lastScreenshotAt = now
         takeScreenshotOfWindow(windowId, mainExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
+                trace("截图回调", probeStart)
                 val bitmap = try {
                     val hardware = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
                     try { hardware?.copy(Bitmap.Config.ARGB_8888, false) } finally { hardware?.recycle() }
@@ -201,6 +203,7 @@ class CaptureService : AccessibilityService() {
                 worker.execute {
                     try {
                         val frame = sample(bitmap)
+                        trace("采样完成", probeStart)
                         val last = lastFrame
                         val stable = last != null && OverlapMatcher.isStable(last, frame)
                         lastFrame = frame
@@ -228,6 +231,7 @@ class CaptureService : AccessibilityService() {
             override fun onFailure(errorCode: Int) {
                 if (!active || token != generation) { return }
                 if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
+                    trace("截图限频", lastScreenshotAt)
                     if (SystemClock.uptimeMillis() - stabilityStartedAt >= 3000L) {
                         busy = false
                         stop("系统截图暂不可用, 已保留完成部分")
@@ -258,6 +262,7 @@ class CaptureService : AccessibilityService() {
 
     private fun process(bitmap: Bitmap, frame: OverlapMatcher.Frame, token: Int, first: Boolean) {
         worker.execute {
+            val processStart = SystemClock.uptimeMillis()
             var message: String? = null
             var accepted = false
             try {
@@ -310,6 +315,7 @@ class CaptureService : AccessibilityService() {
                 if (accepted) { previous?.recycle(); previous = bitmap }
                 else { bitmap.recycle() }
                 busy = false
+                trace("拼接完成", processStart)
                 if (message != null) { stop(message!!) }
                 else if (stopping) { finishCapture() }
                 else {
@@ -373,8 +379,8 @@ class CaptureService : AccessibilityService() {
         if (!targetValid()) { stop("页面已变化, 已保留完成部分"); return }
         if (SystemClock.uptimeMillis() - startedAt > 600_000) { stop("已达到本次截取时长上限"); return }
         val x = screenRegion.exactCenterX()
-        val startY = screenRegion.top + screenRegion.height() * 0.76f
-        val endY = screenRegion.top + screenRegion.height() * 0.36f
+        val startY = screenRegion.top + screenRegion.height() * 0.80f
+        val endY = screenRegion.top + screenRegion.height() * 0.30f
         val path = Path().apply { moveTo(x, startY); lineTo(x, endY) }
         val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 850)).build()
         val submitted = dispatchGesture(gesture, object : GestureResultCallback() {
@@ -476,6 +482,11 @@ class CaptureService : AccessibilityService() {
         dimOverlay?.let { try { getSystemService(WindowManager::class.java).removeView(it) } catch (_: IllegalArgumentException) {} }
         dimOverlay = null
         overlay = null
+    }
+    private fun trace(stage: String, start: Long) {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            android.util.Log.d("ScrollShotTiming", "$stage ${SystemClock.uptimeMillis() - start}ms")
+        }
     }
     private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
 }
