@@ -33,6 +33,8 @@ class CaptureService : AccessibilityService() {
     private var generation = 0
     private var windowId = -1
     private var windowBounds = Rect()
+    private var statusBar: Bitmap? = null
+    private var captureTop = 0
     private var region = Rect()
     private var screenRegion = Rect()
     private var previous: Bitmap? = null
@@ -56,6 +58,8 @@ class CaptureService : AccessibilityService() {
         active = false
         handler.removeCallbacksAndMessages(null)
         removeOverlay()
+        statusBar?.recycle()
+        statusBar = null
         removeFeedback()
         worker.execute {
             previous?.recycle()
@@ -109,8 +113,64 @@ class CaptureService : AccessibilityService() {
         boundsRefined = false
         lastFrame = null
         stabilityStartedAt = 0L
-        showMonitor()
-        captureStable(token, true)
+        captureStatusBar(token)
+    }
+
+    private fun captureStatusBar(token: Int) {
+        statusBar?.recycle()
+        statusBar = null
+        captureTop = windowBounds.top
+        val metrics = getSystemService(WindowManager::class.java).currentWindowMetrics
+        val top = metrics.windowInsets.getInsets(android.view.WindowInsets.Type.statusBars()).top
+        // 仅补齐位于屏幕顶部的应用, 分屏下方窗口不带入其他应用画面.
+        if (top <= 0 || windowBounds.top > top) {
+            showMonitor()
+            captureStable(token, true)
+            return
+        }
+        busy = true
+        takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(result: ScreenshotResult) {
+                val screen = readScreenshot(result)
+                if (!active || token != generation) { screen?.recycle(); return }
+                if (screen == null) { busy = false; stop("无法读取系统状态栏"); return }
+                try {
+                    if (!targetValid()) { busy = false; stop("页面已变化, 请重新截图"); return }
+                    val sx = screen.width.toFloat() / metrics.bounds.width()
+                    val sy = screen.height.toFloat() / metrics.bounds.height()
+                    val left = (windowBounds.left * sx).toInt().coerceIn(0, screen.width - 1)
+                    val right = (windowBounds.right * sx).toInt().coerceIn(left + 1, screen.width)
+                    statusBar = Bitmap.createBitmap(screen, left, 0, right - left, (top * sy).toInt().coerceIn(1, screen.height))
+                    captureTop = 0
+                } finally { if (screen !== statusBar) { screen.recycle() } }
+                showMonitor()
+                captureStable(token, true)
+            }
+            override fun onFailure(errorCode: Int) {
+                if (!active || token != generation) { return }
+                busy = false
+                stop("系统状态栏截图失败($errorCode), 请重试")
+            }
+        })
+    }
+
+    private fun readScreenshot(result: ScreenshotResult): Bitmap? {
+        try {
+            val hardware = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
+            return try { hardware?.copy(Bitmap.Config.ARGB_8888, false) } finally { hardware?.recycle() }
+        } finally { result.hardwareBuffer.close() }
+    }
+
+    private fun includeStatusBar(window: Bitmap): Bitmap {
+        val bar = statusBar ?: return window
+        val addedTop = ((windowBounds.top - captureTop) * window.height.toFloat() / windowBounds.height()).toInt()
+        val result = Bitmap.createBitmap(window.width, window.height + addedTop, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(result)
+        canvas.drawBitmap(window, 0f, addedTop.toFloat(), null)
+        val height = (bar.height.toFloat() * window.width / bar.width).toInt().coerceAtMost(result.height)
+        canvas.drawBitmap(bar, null, Rect(0, 0, result.width, height), null)
+        window.recycle()
+        return result
     }
 
     private fun findScroll(root: AccessibilityNodeInfo, bounds: Rect): AccessibilityNodeInfo? {
@@ -178,16 +238,15 @@ class CaptureService : AccessibilityService() {
         takeScreenshotOfWindow(windowId, mainExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
                 trace("截图回调", probeStart)
-                val bitmap = try {
-                    val hardware = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
-                    try { hardware?.copy(Bitmap.Config.ARGB_8888, false) } finally { hardware?.recycle() }
-                } finally { result.hardwareBuffer.close() }
-                if (bitmap == null) { busy = false; stop("无法读取画面"); return }
-                if (!active || token != generation) { bitmap.recycle(); return }
+                val captured = readScreenshot(result)
+                if (!active || token != generation) { captured?.recycle(); return }
+                if (captured == null) { busy = false; stop("无法读取画面"); return }
+                val bitmap = includeStatusBar(captured)
                 if (first) {
                     val sx = bitmap.width.toFloat() / windowBounds.width()
-                    val sy = bitmap.height.toFloat() / windowBounds.height()
-                    region = Rect(((screenRegion.left - windowBounds.left) * sx).toInt(), ((screenRegion.top - windowBounds.top) * sy).toInt(), ((screenRegion.right - windowBounds.left) * sx).toInt(), ((screenRegion.bottom - windowBounds.top) * sy).toInt())
+                    val sy = bitmap.height.toFloat() / (windowBounds.bottom - captureTop)
+                    region = Rect(((screenRegion.left - windowBounds.left) * sx).toInt(), ((maxOf(screenRegion.top, windowBounds.top) - captureTop) * sy).toInt(), ((screenRegion.right - windowBounds.left) * sx).toInt(), ((screenRegion.bottom - captureTop) * sy).toInt())
+                    statusBar?.let { bar -> region.top = maxOf(region.top, (bar.height.toFloat() * bitmap.width / bar.width).toInt()) }
                     region.intersect(0, 0, bitmap.width, bitmap.height)
                 }
                 worker.execute {
@@ -461,6 +520,8 @@ class CaptureService : AccessibilityService() {
                 busy = false
                 generation++
                 removeOverlay()
+                statusBar?.recycle()
+                statusBar = null
                 if (saved && doc != null) {
                     startActivity(Intent(this, EditorActivity::class.java).putExtra("capture", doc.directory.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 } else { showFeedback(finishReason) }
