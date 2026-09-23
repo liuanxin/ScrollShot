@@ -13,14 +13,14 @@ import kotlin.math.sqrt
 
 object ImageExporter {
     data class Spec(val width: Int, val height: Int, val scale: Double)
-    fun spec(crop: Rect, highQuality: Boolean = true): Spec {
-        val pixelLimit = if (highQuality) { 40_000_000.0 } else { minOf(16_000_000.0, Runtime.getRuntime().maxMemory() / 16.0) }
-        val widthScale = if (highQuality) { 1.0 } else { minOf(1.0, 1080.0 / crop.width()) }
+    fun spec(crop: Rect, png: Boolean = true): Spec {
+        val pixelLimit = if (png) { 40_000_000.0 } else { minOf(16_000_000.0, Runtime.getRuntime().maxMemory() / 16.0) }
+        val widthScale = if (png) { 1.0 } else { minOf(1.0, 1080.0 / crop.width()) }
         val scale = minOf(widthScale, 60000.0 / crop.height(), sqrt(pixelLimit / (crop.width().toDouble() * crop.height())))
         return Spec(maxOf(1, (crop.width() * scale).roundToInt()), maxOf(1, (crop.height() * scale).roundToInt()), scale)
     }
-    fun write(doc: CaptureDocument, crop: Rect, file: File, highQuality: Boolean = true, cancelled: () -> Boolean) {
-        if (highQuality) { writePng(doc, crop, file, cancelled) }
+    fun write(doc: CaptureDocument, crop: Rect, file: File, png: Boolean = true, cancelled: () -> Boolean) {
+        if (png) { writePng(doc, crop, file, cancelled) }
         else { writeJpeg(doc, crop, file, cancelled) }
     }
 

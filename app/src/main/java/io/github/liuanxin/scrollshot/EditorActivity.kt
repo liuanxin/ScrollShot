@@ -22,9 +22,9 @@ class EditorActivity : Activity() {
     private var preview: Bitmap? = null
     private var document: CaptureDocument? = null
     private var saving = false
-    private var highQuality = false
-    private var readyQuality = false
-    private lateinit var qualityButton: Button
+    private var png = false
+    private var readyPng = false
+    private lateinit var formatLabel: TextView
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val exportVersion = java.util.concurrent.atomic.AtomicInteger(0)
     private var readyExport: File? = null
@@ -35,7 +35,7 @@ class EditorActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        highQuality = savedInstanceState?.getBoolean("highQuality") ?: false
+        png = savedInstanceState?.getBoolean("png") ?: false
         window.insetsController?.setSystemBarsAppearance(0,
             android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
                 android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
@@ -51,8 +51,36 @@ class EditorActivity : Activity() {
                 insets
             }
         }
-        title = TextView(this).apply { text = "正在准备长图..."; textSize = 16f; setTextColor(Color.WHITE); setPadding(24, 20, 24, 20) }
-        body.addView(title)
+        val header = LinearLayout(this).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp())
+        }
+        formatLabel = TextView(this).apply {
+            text = if (png) { "PNG" } else { "JPG" }
+            textSize = 16f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(0xffafe6c8.toInt())
+            setPadding(8.dp(), 0, 8.dp(), 0)
+            background = actionBackground()
+            isEnabled = false
+            setOnClickListener {
+                if (!saving) {
+                    png = !png
+                    formatLabel.isEnabled = true
+                    updateTitle()
+                    prepareExport()
+                }
+            }
+        }
+        header.addView(formatLabel, LinearLayout.LayoutParams(-2, 40.dp()))
+        title = TextView(this).apply {
+            text = "正在准备..."
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setPadding(8.dp(), 0, 0, 0)
+        }
+        header.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+        body.addView(header)
         setContentView(body)
         worker.execute {
             try {
@@ -97,15 +125,9 @@ class EditorActivity : Activity() {
                     }
                     button("取消") { confirmDiscard() }
                     button("重置") { cropView.reset() }
-                    qualityButton = button("高清") {
-                        highQuality = !highQuality
-                        updateQualityButton()
-                        updateTitle()
-                        prepareExport()
-                    }
-                    updateQualityButton()
                     saveButton = button("保存") { save() }.apply { isSelected = true }
                     body.addView(actions)
+                    formatLabel.isEnabled = true
                     updateTitle()
                     prepareExport()
                 }
@@ -130,25 +152,19 @@ class EditorActivity : Activity() {
             android.content.res.ColorStateList.valueOf(0x337fcda4), states, shape(Color.WHITE))
     }
 
-    private fun updateQualityButton() {
-        qualityButton.isSelected = highQuality
-        qualityButton.stateDescription = if (highQuality) { "已开启" } else { "已关闭" }
-    }
-
     private fun updateTitle(size: Long? = null) {
         val rect = cropView.cropPixels()
-        val spec = ImageExporter.spec(rect, highQuality)
-        val suffix = if (spec.scale < 0.999) { " · 已缩小" } else { "" }
-        val format = if (highQuality) { "PNG" } else { "JPG" }
-        title.text = "裁剪长图  $format  ${spec.width} × ${spec.height} · ${size?.let { ImageExporter.friendlyBytes(it) } ?: "计算大小中..."}$suffix"
+        val spec = ImageExporter.spec(rect, png)
+        formatLabel.text = if (png) { "PNG" } else { "JPG" }
+        title.text = "${spec.width} × ${spec.height} · ${size?.let { ImageExporter.friendlyBytes(it) } ?: "计算大小中..."}"
     }
 
     private fun prepareExport() {
         if (saving) { return }
         val doc = document ?: return
         val rect = cropView.cropPixels()
-        val quality = highQuality
-        val extension = if (quality) { "png" } else { "jpg" }
+        val usePng = png
+        val extension = if (usePng) { "png" } else { "jpg" }
         val token = exportVersion.incrementAndGet()
         handler.removeCallbacksAndMessages(null)
         saveButton.isEnabled = false
@@ -156,19 +172,19 @@ class EditorActivity : Activity() {
             worker.execute {
                 val file = File(cacheDir, "export-${doc.directory.name}-$token.$extension")
                 try {
-                    ImageExporter.write(doc, rect, file, quality) { token != exportVersion.get() }
+                    ImageExporter.write(doc, rect, file, usePng) { token != exportVersion.get() }
                     runOnUiThread {
                         if (isDestroyed || token != exportVersion.get()) { file.delete(); return@runOnUiThread }
                         readyExport?.delete()
                         readyExport = file
                         readyCrop = rect
-                        readyQuality = quality
+                        readyPng = usePng
                         saveButton.text = "保存"
                         saveButton.isEnabled = true
                         updateTitle(file.length())
                     }
                 } catch (error: OutOfMemoryError) {
-                    exportFailed(file, token, "内存不足, 请缩小裁剪范围或开启高清重试")
+                    exportFailed(file, token, "内存不足, 请缩小裁剪范围后重试")
                 } catch (error: Exception) {
                     exportFailed(file, token, "图片处理失败, 可重新裁剪或稍后重试")
                 }
@@ -191,11 +207,11 @@ class EditorActivity : Activity() {
         val doc = document ?: return
         val rect = cropView.cropPixels()
         val file = readyExport
-        if (file == null || !file.isFile || readyCrop != rect || readyQuality != highQuality) { prepareExport(); return }
-        val spec = ImageExporter.spec(rect, highQuality)
-        val quality = highQuality
+        if (file == null || !file.isFile || readyCrop != rect || readyPng != png) { prepareExport(); return }
+        val spec = ImageExporter.spec(rect, png)
+        val usePng = png
         saving = true
-        qualityButton.isEnabled = false
+        formatLabel.isEnabled = false
         cropView.isEnabled = false
         saveButton.isEnabled = false
         saveButton.text = "保存中..."
@@ -203,11 +219,11 @@ class EditorActivity : Activity() {
             var uri: android.net.Uri? = null
             try {
                 val random = java.security.SecureRandom().nextInt(1_000_000)
-                val extension = if (quality) { "png" } else { "jpg" }
+                val extension = if (usePng) { "png" } else { "jpg" }
                 val name = "%s-%06d.$extension".format(Locale.ROOT, SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date()), random)
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                    put(MediaStore.Images.Media.MIME_TYPE, if (quality) { "image/png" } else { "image/jpeg" })
+                    put(MediaStore.Images.Media.MIME_TYPE, if (usePng) { "image/png" } else { "image/jpeg" })
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ScrollShot")
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                     put(MediaStore.Images.Media.WIDTH, spec.width)
@@ -228,7 +244,7 @@ class EditorActivity : Activity() {
                 runOnUiThread {
                     saving = false
                     cropView.isEnabled = true
-                    qualityButton.isEnabled = true
+                    formatLabel.isEnabled = true
                     saveButton.isEnabled = true
                     saveButton.text = "重试保存"
                     Toast.makeText(this, "保存失败, 草稿仍保留, 请检查存储空间", Toast.LENGTH_LONG).show()
@@ -246,7 +262,7 @@ class EditorActivity : Activity() {
     override fun onBackPressed() { confirmDiscard() }
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        outState.putBoolean("highQuality", highQuality)
+        outState.putBoolean("png", png)
         if (::cropView.isInitialized) {
             val rect = cropView.crop
             outState.putFloatArray("crop", floatArrayOf(rect.left, rect.top, rect.right, rect.bottom))
