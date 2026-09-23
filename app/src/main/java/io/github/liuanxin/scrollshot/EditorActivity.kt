@@ -22,6 +22,21 @@ class EditorActivity : Activity() {
     private var preview: Bitmap? = null
     private var document: CaptureDocument? = null
     private var saving = false
+    private lateinit var shareButton: android.widget.ImageButton
+    private var shared = false
+    private var shareToken: String? = null
+    private var shareReturned = false
+    private var shareFile: File? = null
+    private var shareCallback: android.app.PendingIntent? = null
+    private val shareAction by lazy { "$packageName.SHARE_SELECTED" }
+    private val shareReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+            if (intent.getStringExtra("token") == shareToken && shareToken != null) {
+                shared = true
+                finishShare()
+            }
+        }
+    }
     private var png = false
     private var readyPng = false
     private lateinit var formatLabel: TextView
@@ -35,8 +50,17 @@ class EditorActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        registerReceiver(shareReceiver, android.content.IntentFilter(shareAction), RECEIVER_NOT_EXPORTED)
+        shareToken = savedInstanceState?.getString("shareToken")
+        shareReturned = savedInstanceState?.getBoolean("shareReturned") ?: false
+        shared = savedInstanceState?.getBoolean("shared") == true ||
+            (shareToken != null && getSharedPreferences("share", MODE_PRIVATE).getString(shareToken, null) == "chosen")
+        shareFile = savedInstanceState?.getString("shareFile")?.let { File(it) }
+        if (shared) { finishShare(); return }
         png = savedInstanceState?.getBoolean("png") ?: false
-        window.insetsController?.setSystemBarsAppearance(0,
+        window.insetsController?.setSystemBarsAppearance(
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
             android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
                 android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
         onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { confirmDiscard() }
@@ -44,7 +68,7 @@ class EditorActivity : Activity() {
         if (id == null || id.any { !it.isDigit() }) { finish(); return }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xff17211e.toInt())
+            setBackgroundColor(0xfff7f8fa.toInt())
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
@@ -59,7 +83,7 @@ class EditorActivity : Activity() {
             text = if (png) { "PNG" } else { "JPG" }
             textSize = 16f
             gravity = android.view.Gravity.CENTER
-            setTextColor(0xffafe6c8.toInt())
+            setTextColor(0xff3568b0.toInt())
             setPadding(8.dp(), 0, 8.dp(), 0)
             background = actionBackground()
             isEnabled = false
@@ -76,14 +100,25 @@ class EditorActivity : Activity() {
         title = TextView(this).apply {
             text = "正在准备..."
             textSize = 16f
-            setTextColor(Color.WHITE)
+            setTextColor(0xff252a34.toInt())
             setPadding(8.dp(), 0, 0, 0)
         }
         header.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+        shareButton = android.widget.ImageButton(this).apply {
+            setImageResource(R.drawable.ic_share)
+            imageTintList = android.content.res.ColorStateList.valueOf(0xff3568b0.toInt())
+            contentDescription = "分享"
+            setPadding(10.dp(), 10.dp(), 10.dp(), 10.dp())
+            background = actionBackground()
+            isEnabled = false
+            setOnClickListener { share() }
+        }
+        header.addView(shareButton, LinearLayout.LayoutParams(44.dp(), 44.dp()).apply { marginStart = 8.dp() })
         body.addView(header)
         setContentView(body)
         worker.execute {
             try {
+                ShareProvider.clean(this)
                 val doc = CaptureDocument.read(File(filesDir, "captures/$id"))
                 val bitmap = doc.preview()
                 runOnUiThread {
@@ -115,7 +150,7 @@ class EditorActivity : Activity() {
                             background = actionBackground()
                             setTextColor(android.content.res.ColorStateList(
                                 arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf(android.R.attr.state_selected), intArrayOf()),
-                                intArrayOf(0xff71867c.toInt(), 0xff183b2b.toInt(), 0xffdeebe4.toInt())))
+                                intArrayOf(0xff9198a3.toInt(), 0xffffffff.toInt(), 0xff35435c.toInt())))
                             setOnClickListener { if (!saving) { action() } }
                         }
                         actions.addView(button, LinearLayout.LayoutParams(0, 48.dp(), 1f).apply {
@@ -136,6 +171,14 @@ class EditorActivity : Activity() {
             }
         }
     }
+    override fun onResume() {
+        super.onResume()
+        if (shareToken != null && getSharedPreferences("share", MODE_PRIVATE).getString(shareToken, null) == "chosen") {
+            shared = true
+            finishShare()
+        }
+    }
+
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
 
     private fun actionBackground(): android.graphics.drawable.Drawable {
@@ -144,12 +187,12 @@ class EditorActivity : Activity() {
             cornerRadius = 16.dp().toFloat()
         }
         val states = android.graphics.drawable.StateListDrawable().apply {
-            addState(intArrayOf(-android.R.attr.state_enabled), shape(0xff23342c.toInt()))
-            addState(intArrayOf(android.R.attr.state_selected), shape(0xffafe6c8.toInt()))
-            addState(intArrayOf(), shape(0xff2b3b33.toInt()))
+            addState(intArrayOf(-android.R.attr.state_enabled), shape(0xffedf0f4.toInt()))
+            addState(intArrayOf(android.R.attr.state_selected), shape(0xff3568b0.toInt()))
+            addState(intArrayOf(), shape(0xffe5ebf4.toInt()))
         }
         return android.graphics.drawable.RippleDrawable(
-            android.content.res.ColorStateList.valueOf(0x337fcda4), states, shape(Color.WHITE))
+            android.content.res.ColorStateList.valueOf(0x333568b0), states, shape(Color.WHITE))
     }
 
     private fun updateTitle(size: Long? = null) {
@@ -168,6 +211,7 @@ class EditorActivity : Activity() {
         val token = exportVersion.incrementAndGet()
         handler.removeCallbacksAndMessages(null)
         saveButton.isEnabled = false
+        shareButton.isEnabled = false
         handler.postDelayed({
             worker.execute {
                 val file = File(cacheDir, "export-${doc.directory.name}-$token.$extension")
@@ -181,6 +225,7 @@ class EditorActivity : Activity() {
                         readyPng = usePng
                         saveButton.text = "保存"
                         saveButton.isEnabled = true
+                        shareButton.isEnabled = true
                         updateTitle(file.length())
                     }
                 } catch (error: OutOfMemoryError) {
@@ -203,6 +248,109 @@ class EditorActivity : Activity() {
         }
     }
 
+    private fun share() {
+        if (saving) { return }
+        val file = readyExport ?: return
+        if (!file.isFile || readyCrop != cropView.cropPixels() || readyPng != png) { prepareExport(); return }
+        saving = true
+        shareButton.isEnabled = false
+        saveButton.isEnabled = false
+        formatLabel.isEnabled = false
+        cropView.isEnabled = false
+        worker.execute {
+            var copy: File? = null
+            try {
+                val folder = File(cacheDir, "shares").apply { mkdirs() }
+                copy = File(folder, "${java.util.UUID.randomUUID()}.${file.extension}")
+                file.copyTo(copy)
+                copy.setLastModified(System.currentTimeMillis())
+                val uri = android.net.Uri.Builder().scheme("content").authority("$packageName.share").appendPath(copy.name).build()
+                getSystemService(android.app.job.JobScheduler::class.java).schedule(
+                    android.app.job.JobInfo.Builder(41, android.content.ComponentName(this, ShareCleanupService::class.java))
+                        .setMinimumLatency(ShareProvider.RETENTION).build())
+                runOnUiThread {
+                    if (isDestroyed || isFinishing) { copy.delete(); return@runOnUiThread }
+                    shareFile = copy
+                    shared = false
+                    shareReturned = false
+                    shareToken = java.util.UUID.randomUUID().toString()
+                    getSharedPreferences("share", MODE_PRIVATE).edit().putString(shareToken, document!!.directory.name).commit()
+                    try {
+                        shareCallback = android.app.PendingIntent.getBroadcast(this, 0,
+                            android.content.Intent(this, ShareReceiver::class.java).setAction(shareToken).putExtra("token", shareToken),
+                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_ONE_SHOT)
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = if (readyPng) { "image/png" } else { "image/jpeg" }
+                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                            clipData = android.content.ClipData.newRawUri("截图", uri)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivityForResult(android.content.Intent.createChooser(send, null, shareCallback!!.intentSender), 41)
+                    } catch (_: Exception) { cancelShare(); Toast.makeText(this, "无法打开分享面板", Toast.LENGTH_SHORT).show() }
+                }
+            } catch (_: Exception) {
+                copy?.delete()
+                runOnUiThread { cancelShare(); Toast.makeText(this, "分享图片准备失败", Toast.LENGTH_SHORT).show() }
+            }
+        }
+    }
+
+    @Deprecated("系统分享面板返回")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 41) {
+            shareReturned = true
+            if (shareToken != null && getSharedPreferences("share", MODE_PRIVATE).getString(shareToken, null) == "chosen") {
+                shared = true
+                finishShare()
+            }
+            if (!shared) {
+                // 选择回调可能晚于返回; 保留事务, 直到用户再次操作编辑页才作废.
+                saving = false
+                if (::cropView.isInitialized) {
+                    cropView.isEnabled = true
+                    formatLabel.isEnabled = true
+                    saveButton.isEnabled = true
+                    shareButton.isEnabled = true
+                }
+            }
+        }
+    }
+
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (shareReturned && event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            // 继续编辑即结束上次分享事务, 迟到回调不能删除新修改的草稿.
+            shareToken?.let { getSharedPreferences("share", MODE_PRIVATE).edit().remove(it).commit() }
+            shareToken = null
+            shareCallback?.cancel()
+            shareReturned = false
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    private fun cancelShare() {
+        shareToken?.let { getSharedPreferences("share", MODE_PRIVATE).edit().remove(it).commit() }
+        shareToken = null
+        shareCallback?.cancel()
+        shareFile?.delete()
+        shareFile = null
+        saving = false
+        if (::cropView.isInitialized) {
+            cropView.isEnabled = true
+            formatLabel.isEnabled = true
+            saveButton.isEnabled = true
+            shareButton.isEnabled = true
+        }
+    }
+
+    private fun finishShare() {
+        // 系统只报告目标选择, 不提供对方应用实际发送成功的状态.
+        shareToken?.let { getSharedPreferences("share", MODE_PRIVATE).edit().remove(it).commit() }
+        shareToken = null
+        saving = false
+        finish()
+    }
+
     private fun save() {
         val doc = document ?: return
         val rect = cropView.cropPixels()
@@ -211,6 +359,7 @@ class EditorActivity : Activity() {
         val spec = ImageExporter.spec(rect, png)
         val usePng = png
         saving = true
+        shareButton.isEnabled = false
         formatLabel.isEnabled = false
         cropView.isEnabled = false
         saveButton.isEnabled = false
@@ -246,6 +395,7 @@ class EditorActivity : Activity() {
                     cropView.isEnabled = true
                     formatLabel.isEnabled = true
                     saveButton.isEnabled = true
+                    shareButton.isEnabled = true
                     saveButton.text = "重试保存"
                     Toast.makeText(this, "保存失败, 草稿仍保留, 请检查存储空间", Toast.LENGTH_LONG).show()
                 }
@@ -263,12 +413,21 @@ class EditorActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean("png", png)
+        outState.putBoolean("shared", shared)
+        outState.putString("shareToken", shareToken)
+        outState.putBoolean("shareReturned", shareReturned)
+        outState.putString("shareFile", shareFile?.path)
         if (::cropView.isInitialized) {
             val rect = cropView.crop
             outState.putFloatArray("crop", floatArrayOf(rect.left, rect.top, rect.right, rect.bottom))
         }
     }
     override fun onDestroy() {
+        unregisterReceiver(shareReceiver)
+        if (isFinishing) {
+            shareCallback?.cancel()
+            shareToken?.let { getSharedPreferences("share", MODE_PRIVATE).edit().remove(it).commit() }
+        }
         exportVersion.incrementAndGet()
         handler.removeCallbacksAndMessages(null)
         if (!saving) { readyExport?.delete() }

@@ -68,18 +68,18 @@ class CropView(context: Context, private val bitmap: Bitmap, private val imageWi
     fun cropPixels(): Rect = Rect(crop.left.toInt(), crop.top.toInt(), crop.right.toInt(), crop.bottom.toInt())
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(0xff17211e.toInt())
+        canvas.drawColor(0xffedf0f4.toInt())
         val image = RectF(offsetX, offsetY, offsetX + imageWidth * zoom, offsetY + imageHeight * zoom)
         paint.color = Color.WHITE
         paint.style = Paint.Style.FILL
         canvas.drawBitmap(bitmap, null, image, paint)
         val selected = RectF(offsetX + crop.left * zoom, offsetY + crop.top * zoom, offsetX + crop.right * zoom, offsetY + crop.bottom * zoom)
-        paint.color = 0xa0000000.toInt()
+        paint.color = 0x60000000.toInt()
         canvas.drawRect(image.left, image.top, image.right, selected.top, paint)
         canvas.drawRect(image.left, selected.bottom, image.right, image.bottom, paint)
         canvas.drawRect(image.left, selected.top, selected.left, selected.bottom, paint)
         canvas.drawRect(selected.right, selected.top, image.right, selected.bottom, paint)
-        paint.color = 0xff8ff2c8.toInt()
+        paint.color = 0xff467bc2.toInt()
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 2 * resources.displayMetrics.density
         canvas.drawRect(selected, paint)
