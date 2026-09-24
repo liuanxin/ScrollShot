@@ -167,7 +167,7 @@ class EditorActivity : Activity() {
                     prepareExport()
                 }
             } catch (error: Exception) {
-                runOnUiThread { Toast.makeText(this, "无法打开截图草稿", Toast.LENGTH_LONG).show(); finish() }
+                runOnUiThread { Toast.makeText(this, "无法打开截图", Toast.LENGTH_LONG).show(); finish() }
             }
         }
     }
@@ -397,7 +397,7 @@ class EditorActivity : Activity() {
                     saveButton.isEnabled = true
                     shareButton.isEnabled = true
                     saveButton.text = "重试保存"
-                    Toast.makeText(this, "保存失败, 草稿仍保留, 请检查存储空间", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "保存失败, 请检查存储空间后重试", Toast.LENGTH_LONG).show()
                 }
             }
         }

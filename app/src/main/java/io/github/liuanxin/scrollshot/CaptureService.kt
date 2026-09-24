@@ -66,12 +66,6 @@ class CaptureService : AccessibilityService() {
         worker.execute {
             previous?.recycle()
             previous = null
-            document?.let { doc ->
-                if (doc.reason.isEmpty()) {
-                    doc.reason = "服务被中断, 已恢复完成部分"
-                    try { doc.persist() } catch (_: Exception) {}
-                }
-            }
         }
         worker.shutdown()
         if (instance === this) { instance = null }
@@ -553,16 +547,9 @@ class CaptureService : AccessibilityService() {
         dimOverlay = null
         overlay = null
     }
-    /** 只保留最新一份有效草稿供恢复, 其余目录连同调试图一并删除. */
+    /** 截图即用即走, 新截取开始时删除之前所有截取目录. */
     private fun cleanDrafts() {
-        val dirs = File(filesDir, "captures").listFiles() ?: return
-        var latest: File? = null
-        for (dir in dirs) {
-            if (File(dir, "document.json").isFile && (latest == null || dir.name > latest.name)) { latest = dir }
-        }
-        for (dir in dirs) {
-            if (dir != latest) { dir.deleteRecursively() }
-        }
+        File(filesDir, "captures").deleteRecursively()
     }
 
     private fun trace(stage: String, start: Long) {

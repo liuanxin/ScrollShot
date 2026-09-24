@@ -58,13 +58,6 @@ class SetupActivity : Activity() {
                 } else { "请下拉快捷设置, 点编辑, 将长截图拖入按钮区." }
             }
         }
-        button("打开本机测试长文") { startActivity(Intent(this, TestPageActivity::class.java)) }
-        val drafts = java.io.File(filesDir, "captures").listFiles()?.filter { java.io.File(it, "document.json").isFile }?.sortedByDescending { it.name }
-        if (!drafts.isNullOrEmpty()) {
-            button("恢复上次未保存的截图") {
-                startActivity(Intent(this, EditorActivity::class.java).putExtra("capture", drafts.first().name))
-            }
-        }
         button("完成") { finish() }
         val scroll = android.widget.ScrollView(this).apply { addView(body) }
         setContentView(scroll)
