@@ -43,7 +43,7 @@ acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a
 依赖缓存齐全时:
 
 ```sh
-JAVA_HOME=/usr/lib/jvm/jdk-21.0.10+7 ./gradlew --offline :app:assembleDebug :app:testDebugUnitTest
+JAVA_HOME=/usr/lib/jvm/jdk-21.0.10+7 ./gradlew --offline :app:assembleRelease
 ```
 
 本机缺少 Maven AAPT2 缓存时, 可直接使用已安装的 SDK 工具:
@@ -68,9 +68,7 @@ adb shell cmd statusbar add-tile io.github.liuanxin.scrollshot/.CaptureTileServi
 
 ## 验证重点
 
-授权页内置带连续段落编号、固定标题和底栏的测试长文, 用于检查首段保留、重叠拼接、点击顶部提示条停止与裁剪保存.
-
-核心单元测试覆盖实际位移、重复内容歧义、反向移动、无重叠跳页、空白画面及局部动画检测. 真机行为以 `docs/VALIDATION.md` 记录为准.
+授权页内置带连续段落编号、固定标题和底栏的测试长文, 用于检查首段保留、重叠拼接、点击顶部提示条停止与裁剪保存. 真机行为以 `docs/VALIDATION.md` 记录为准.
 
 ## 限制
 
@@ -81,15 +79,5 @@ adb shell cmd statusbar add-tile io.github.liuanxin.scrollshot/.CaptureTileServi
 - 截取过程中点击顶部提示条停止的触摸取消时序需要逐机验证, 不宣称所有系统均不会误触.
 - 超长图即使能正确保存, 相册缩放能力也取决于查看器.
 
-
-## 无第三方依赖的真机导出测试
-
-```sh
-./gradlew --offline -Pandroid.aapt2FromMavenOverride=/home/ty/Android/Sdk/build-tools/36.1.0/aapt2 :app:assembleDebugAndroidTest
-adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb shell am instrument -w io.github.liuanxin.scrollshot.test/io.github.liuanxin.scrollshot.ExportInstrumentation
-```
-
-覆盖 120000 像素超长图缩小、PNG/JPEG 格式与跨分段裁剪核对、取消清理以及文件大小格式化. 测试会重启应用进程, 不要在截取过程中执行. 测试后需恢复无障碍服务并确认连接.
 
 截图请求间隔采用 350ms, 高于 AOSP 的 333ms 限频阈值, 避免过快请求反而产生额外重试. 参考: https://android.googlesource.com/platform/frameworks/base/+/master/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java

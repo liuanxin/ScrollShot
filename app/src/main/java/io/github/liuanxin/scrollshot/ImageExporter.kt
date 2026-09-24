@@ -1,7 +1,7 @@
 package io.github.liuanxin.scrollshot
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Color
@@ -43,9 +43,9 @@ object ImageExporter {
                 if (bottom > top) {
                     val targetBottom = ((offset + bottom - crop.top) * spec.scale).roundToInt().coerceAtMost(spec.height)
                     if (targetBottom > written) {
-                        val image = requireNotNull(BitmapFactory.decodeFile(File(doc.directory, part.file).path))
+                        val image = decode(doc, part, crop, top, bottom)
                         try {
-                            canvas.drawBitmap(image, Rect(crop.left, top, crop.right, bottom), Rect(0, written, spec.width, targetBottom), paint)
+                            canvas.drawBitmap(image, null, Rect(0, written, spec.width, targetBottom), paint)
                         } finally { image.recycle() }
                         written = targetBottom
                     }
@@ -77,11 +77,9 @@ object ImageExporter {
                             val targetBottom = ((offset + bottom - crop.top) * spec.scale).roundToInt().coerceAtMost(spec.height)
                             val targetHeight = targetBottom - written
                             if (targetHeight > 0) {
-                                val original = requireNotNull(BitmapFactory.decodeFile(File(doc.directory, part.file).path))
-                                var clipped: Bitmap? = null
+                                val clipped = decode(doc, part, crop, top, bottom)
                                 var scaled: Bitmap? = null
                                 try {
-                                    clipped = Bitmap.createBitmap(original, crop.left, top, crop.width(), bottom - top)
                                     scaled = Bitmap.createScaledBitmap(clipped, spec.width, targetHeight, true)
                                     for (y in 0 until targetHeight) {
                                         if (y % 64 == 0 && cancelled()) { throw CancellationException() }
@@ -89,9 +87,8 @@ object ImageExporter {
                                         png.row(pixels)
                                     }
                                 } finally {
-                                    if (scaled !== clipped && scaled !== original) { scaled?.recycle() }
-                                    if (clipped !== original) { clipped?.recycle() }
-                                    original.recycle()
+                                    if (scaled !== clipped) { scaled?.recycle() }
+                                    clipped.recycle()
                                 }
                                 written = targetBottom
                             }
@@ -101,6 +98,14 @@ object ImageExporter {
                 }
             }
         } catch (error: Exception) { file.delete(); throw error }
+    }
+
+    /** 只解码分段中位于裁剪范围内的区域, 不载入整段原图. */
+    private fun decode(doc: CaptureDocument, part: CaptureDocument.Part, crop: Rect, top: Int, bottom: Int): Bitmap {
+        val decoder = BitmapRegionDecoder.newInstance(File(doc.directory, part.file).path)
+        try {
+            return requireNotNull(decoder.decodeRegion(Rect(crop.left, top, crop.right, bottom), null))
+        } finally { decoder.recycle() }
     }
 
     fun friendlyBytes(bytes: Long): String {

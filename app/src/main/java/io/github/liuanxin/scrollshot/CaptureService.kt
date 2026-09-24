@@ -38,6 +38,8 @@ class CaptureService : AccessibilityService() {
     private var region = Rect()
     private var screenRegion = Rect()
     private var previous: Bitmap? = null
+    private var previousFrame: OverlapMatcher.Frame? = null
+    private val debuggable by lazy { applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 }
     private var document: CaptureDocument? = null
     private var overlay: TextView? = null
     private var dimOverlay: View? = null
@@ -108,6 +110,7 @@ class CaptureService : AccessibilityService() {
         busy = false
         startedAt = SystemClock.uptimeMillis()
         previous = null
+        previousFrame = null
         document = null
         unchangedCount = 0
         boundsRefined = false
@@ -296,8 +299,9 @@ class CaptureService : AccessibilityService() {
 
     private fun sample(bitmap: Bitmap): OverlapMatcher.Frame {
         require(region.width() > 0 && region.height() > 0 && region.bottom <= bitmap.height)
-        val cropped = Bitmap.createBitmap(bitmap, region.left, region.top, region.width(), region.height())
-        val small = Bitmap.createScaledBitmap(cropped, 96, region.height(), true)
+        // 裁剪与横向缩小一步完成, 不分配整块区域的中间位图.
+        val matrix = android.graphics.Matrix().apply { setScale(96f / region.width(), 1f) }
+        val small = Bitmap.createBitmap(bitmap, region.left, region.top, region.width(), region.height(), matrix, true)
         val pixels = IntArray(small.width * small.height)
         small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
         for (i in pixels.indices) {
@@ -305,8 +309,7 @@ class CaptureService : AccessibilityService() {
             pixels[i] = (((c shr 16) and 255) * 77 + ((c shr 8) and 255) * 150 + (c and 255) * 29) shr 8
         }
         val frame = OverlapMatcher.Frame(small.width, small.height, pixels)
-        if (small !== cropped && small !== bitmap) { small.recycle() }
-        if (cropped !== bitmap) { cropped.recycle() }
+        if (small !== bitmap) { small.recycle() }
         return frame
     }
 
@@ -317,23 +320,32 @@ class CaptureService : AccessibilityService() {
             var accepted = false
             try {
                 if (first) {
+                    cleanDrafts()
                     val directory = File(filesDir, "captures/${System.currentTimeMillis()}")
                     val doc = CaptureDocument(directory, bitmap.width)
-                    // 首帧完整写入磁盘. 拼接文档只延后固定底栏, 原图另存可核对.
+                    // 拼接文档只延后固定底栏; debug 包另存首帧原图便于核对.
                     directory.mkdirs()
-                    File(directory, "first.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    if (debuggable) { File(directory, "first.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } }
                     doc.append(bitmap, 0, region.bottom)
                     document = doc
+                    previousFrame = frame
                     accepted = true
                 } else {
                     val old = requireNotNull(previous)
-                    if (!boundsRefined && OverlapMatcher.difference(sample(old), frame) >= 0.7) {
+                    var oldFrame = requireNotNull(previousFrame)
+                    var nowFrame = frame
+                    if (!boundsRefined && OverlapMatcher.difference(oldFrame, nowFrame) >= 0.7) {
+                        val before = Rect(region)
                         refineContentBounds(old, bitmap)
                         document?.replaceInitial(old, region.bottom)
                         boundsRefined = true
+                        if (region != before) {
+                            oldFrame = sample(old)
+                            nowFrame = sample(bitmap)
+                        }
                     }
-                    val match = OverlapMatcher.match(sample(old), sample(bitmap))
-                    android.util.Log.d("ScrollShot", "region=$region match=$match")
+                    val match = OverlapMatcher.match(oldFrame, nowFrame)
+                    if (debuggable) { android.util.Log.d("ScrollShot", "region=$region match=$match") }
                     when (match) {
                         is OverlapMatcher.Result.Match -> {
                             val shift = refineShift(old, bitmap, match.shift)
@@ -341,7 +353,12 @@ class CaptureService : AccessibilityService() {
                             else {
                                 val doc = requireNotNull(document)
                                 if (doc.height + shift + bitmap.height - region.bottom > doc.maxHeight) { message = "已达到安全长度上限" }
-                                else { doc.append(bitmap, region.bottom - shift, region.bottom); accepted = true; unchangedCount = 0 }
+                                else {
+                                    doc.append(bitmap, region.bottom - shift, region.bottom)
+                                    previousFrame = nowFrame
+                                    accepted = true
+                                    unchangedCount = 0
+                                }
                             }
                         }
                         OverlapMatcher.Result.Unchanged -> {
@@ -351,7 +368,7 @@ class CaptureService : AccessibilityService() {
                         OverlapMatcher.Result.Uncertain -> { message = "页面跳动或重叠不明确, 已保留完成部分" }
                     }
                 }
-                if (message != null && !first && applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                if (message != null && !first && debuggable) {
                     try {
                         document?.let { doc ->
                             File(doc.directory, "failed-current.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -503,6 +520,7 @@ class CaptureService : AccessibilityService() {
         val doc = document
         val last = previous
         previous = null
+        previousFrame = null
         worker.execute {
             var saved = false
             try {
@@ -535,8 +553,20 @@ class CaptureService : AccessibilityService() {
         dimOverlay = null
         overlay = null
     }
+    /** 只保留最新一份有效草稿供恢复, 其余目录连同调试图一并删除. */
+    private fun cleanDrafts() {
+        val dirs = File(filesDir, "captures").listFiles() ?: return
+        var latest: File? = null
+        for (dir in dirs) {
+            if (File(dir, "document.json").isFile && (latest == null || dir.name > latest.name)) { latest = dir }
+        }
+        for (dir in dirs) {
+            if (dir != latest) { dir.deleteRecursively() }
+        }
+    }
+
     private fun trace(stage: String, start: Long) {
-        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+        if (debuggable) {
             android.util.Log.d("ScrollShotTiming", "$stage ${SystemClock.uptimeMillis() - start}ms")
         }
     }

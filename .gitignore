@@ -7,3 +7,6 @@ local.properties
 keystore/
 keystore.properties
 gradle/wrapper/gradle-*-bin.zip
+*.jks
+*.keystore
+*.apk
